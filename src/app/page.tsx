@@ -10,11 +10,12 @@ export default function Home() {
         {/* Image Wrapper */}
         <div className="h-screen w-full">
           <ThreeDParallax
-            image={profileParallax}
+            image={toothParallax}
             className="h-full w-auto mx-auto"
             data-parallax-hover
             data-parallax-hover-x="-0.02"
             data-parallax-hover-y="0.03"
+            data-dot-invert
           />
         </div>
       </HoverParallax>
