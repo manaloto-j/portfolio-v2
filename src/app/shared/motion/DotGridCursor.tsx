@@ -13,7 +13,7 @@ const LERP = 1,
   IDLE_MS = 300,
   DISSIPATE = 0.025,
   RESTORE = 0.12;
-const ALPHA_LEVELS = 32,
+const ALPHA_LEVELS = 16,
   RADIUS_SQ = RADIUS * RADIUS;
 const MAX_STEP_PX = 32,
   SEGMENT_ALPHA_CULL = 0.004,
@@ -56,7 +56,7 @@ interface Entry {
 }
 
 export default function DotGridCursor({
-  color = "black",
+  color = "#FFFFFF",
 }: { color?: string } = {}) {
   const cvs = useRef<HTMLCanvasElement>(null);
 
@@ -329,7 +329,7 @@ export default function DotGridCursor({
       for (let i = 0; i <= ALPHA_LEVELS; i++) {
         const es = s.batches[i];
         if (!es.length) continue;
-        ctx.globalAlpha = i / ALPHA_LEVELS;
+        ctx.globalAlpha = 0.2 + 0.8 * (i / ALPHA_LEVELS);
         ctx.beginPath();
         for (let j = 0; j < es.length; j++) {
           const { r, dot } = es[j],
