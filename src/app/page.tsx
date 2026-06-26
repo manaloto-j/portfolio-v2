@@ -10,8 +10,8 @@ export default function Home() {
         {/* Image Wrapper */}
         <div className="h-screen w-full">
           <ThreeDParallax
-            image={toothParallax}
-            className="h-full w-auto mx-auto"
+            image={profileParallax}
+            className="relative h-full w-auto mx-auto z-2"
             data-parallax-hover
             data-parallax-hover-x="-0.02"
             data-parallax-hover-y="0.03"
