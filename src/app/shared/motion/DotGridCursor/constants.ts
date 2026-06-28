@@ -13,6 +13,9 @@ export const DOT_MAX       = 3;
 export const DOT_BASE_HOVER = 5;
 export const DOT_MAX_HOVER  = 5;
 
+/** Extra spacing around [data-dotgridcursor-exclude] elements where dots hide */
+export const EXCLUDE_OFFSET = 48;
+
 // ─── Trail Decay ──────────────────────────────────────────────────────────────
 export const DECAY_ALPHA   = 0.92;
 export const DECAY_SIZE    = 0.6;

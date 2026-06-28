@@ -17,4 +17,5 @@ export type ThreeDParallaxProps = Omit<HTMLAttributes<HTMLDivElement>, "children
   planeScale?: number;
   invertX?: boolean;
   invertY?: boolean;
+  "data-3d-idle"?: boolean | string;
 };

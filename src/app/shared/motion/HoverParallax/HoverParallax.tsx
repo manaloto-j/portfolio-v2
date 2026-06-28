@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect, useState } from "react";
+import { useLayoutEffect, useSyncExternalStore } from "react";
 import { usePathname } from "next/navigation";
 import gsap from "gsap";
 
@@ -24,28 +24,40 @@ const KEY_MAP: Record<string, string> = {
   d: "keyd",
 };
 
+const IDLE_PERIOD_MS = 2400;
+const IDLE_STRENGTH = 0.1;
+const DESKTOP_QUERY = "(min-width: 1024px)";
+
+const getIsMobileSnapshot = () =>
+  typeof window === "undefined" || !window.matchMedia(DESKTOP_QUERY).matches;
+
+const subscribeToDesktopQuery = (onStoreChange: () => void) => {
+  if (typeof window === "undefined") return () => {};
+
+  const mq = window.matchMedia(DESKTOP_QUERY);
+  mq.addEventListener("change", onStoreChange);
+  return () => mq.removeEventListener("change", onStoreChange);
+};
+
 export default function HoverParallax({
   children,
 }: {
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-
-  const [isMobile, setIsMobile] = useState(true);
-
-  useLayoutEffect(() => {
-    const mq = window.matchMedia("(min-width: 1024px)");
-    setIsMobile(!mq.matches);
-    const handler = (e: MediaQueryListEvent) => setIsMobile(!e.matches);
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
-  }, []);
+  const isMobile = useSyncExternalStore(
+    subscribeToDesktopQuery,
+    getIsMobileSnapshot,
+    () => true,
+  );
 
   useLayoutEffect(() => {
     if (isMobile || !window.matchMedia("(hover: hover)").matches) return;
 
     let isDisabledGlobally = false;
     let lastPointer: { x: number; y: number } | null = null;
+    let idleRaf = 0;
+    let idleStartedAt = 0;
 
     const isTypingTarget = (target: EventTarget | null) =>
       target instanceof HTMLElement &&
@@ -54,7 +66,7 @@ export default function HoverParallax({
 
     const allSelectors =
       CONFIG.map((c) => c.sel).join(", ") +
-      ", [data-parallax-hover-x], [data-parallax-hover-y], [data-parallax-hover], [data-parallax-hover-lerp]";
+      ", [data-parallax-hover-x], [data-parallax-hover-y], [data-parallax-hover], [data-parallax-hover-idle], [data-parallax-hover-lerp]";
     const elements = Array.from(
       new Set(gsap.utils.toArray<HTMLElement>(allSelectors)),
     );
@@ -87,7 +99,9 @@ export default function HoverParallax({
         if (!isNaN(val)) sy = val;
       }
       if (el.hasAttribute("data-parallax-hover-lerp")) {
-        const val = parseFloat(el.getAttribute("data-parallax-hover-lerp") || "");
+        const val = parseFloat(
+          el.getAttribute("data-parallax-hover-lerp") || "",
+        );
         if (!isNaN(val)) lerp = val;
       }
 
@@ -98,9 +112,14 @@ export default function HoverParallax({
         yTo: gsap.quickTo(el, "y", { duration: lerp, ease: "power3.out" }),
         sx,
         sy,
+        idleEnabled:
+          el.hasAttribute("data-parallax-hover-idle") &&
+          el.getAttribute("data-parallax-hover-idle") !== "false",
         pressedKeys: new Set<string>(),
         elWidth: 0,
         elHeight: 0,
+        currentNx: 0,
+        currentNy: 0,
       };
     });
 
@@ -124,11 +143,52 @@ export default function HoverParallax({
         t.yTo(0);
         return;
       }
-      let mx = t.sx * t.elWidth;
-      let my = t.sy * t.elHeight;
+      const mx = t.sx * t.elWidth;
+      const my = t.sy * t.elHeight;
 
       t.xTo(nx * mx);
       t.yTo(ny * my);
+    };
+
+    const setTargetDisplacement = (
+      t: (typeof targets)[0],
+      nx: number,
+      ny: number,
+    ) => {
+      t.currentNx = nx;
+      t.currentNy = ny;
+      applyDisplacement(t, nx, ny);
+    };
+
+    const stopIdle = () => {
+      if (idleRaf) {
+        cancelAnimationFrame(idleRaf);
+        idleRaf = 0;
+      }
+    };
+
+    const runIdle = (timestamp: number) => {
+      if (!idleStartedAt) idleStartedAt = timestamp;
+
+      const ny = Math.sin(
+        ((timestamp - idleStartedAt) / IDLE_PERIOD_MS) * Math.PI * 2,
+      );
+
+      targets.forEach((t) => {
+        if (!t.idleEnabled || t.pressedKeys.size > 0) return;
+        applyDisplacement(t, t.currentNx, t.currentNy + ny * IDLE_STRENGTH);
+      });
+
+      idleRaf = requestAnimationFrame(runIdle);
+    };
+
+    const scheduleIdle = () => {
+      stopIdle();
+      if (!targets.some((t) => t.idleEnabled) || isDisabledGlobally) return;
+      if (targets.some((t) => t.pressedKeys.size > 0)) return;
+
+      idleStartedAt = 0;
+      idleRaf = requestAnimationFrame(runIdle);
     };
 
     const updateTargetFromPointer = (
@@ -137,8 +197,8 @@ export default function HoverParallax({
       cy: number,
     ) => {
       if (t.pressedKeys.size > 0) return;
-      
-      applyDisplacement(
+
+      setTargetDisplacement(
         t,
         (cx - window.innerWidth / 2) / (window.innerWidth / 2),
         (cy - window.innerHeight / 2) / (window.innerHeight / 2),
@@ -149,7 +209,7 @@ export default function HoverParallax({
       if (t.pressedKeys.size === 0) {
         if (lastPointer)
           updateTargetFromPointer(t, lastPointer.x, lastPointer.y);
-        else applyDisplacement(t, 0, 0);
+        else setTargetDisplacement(t, 0, 0);
         return;
       }
 
@@ -168,12 +228,14 @@ export default function HoverParallax({
         ny = 1;
       }
 
-      applyDisplacement(t, nx, ny);
+      setTargetDisplacement(t, nx, ny);
     };
 
     const onMouseMove = (e: MouseEvent) => {
+      stopIdle();
       lastPointer = { x: e.clientX, y: e.clientY };
       targets.forEach((t) => updateTargetFromPointer(t, e.clientX, e.clientY));
+      scheduleIdle();
     };
 
     const onResize = () => {
@@ -185,11 +247,13 @@ export default function HoverParallax({
     };
 
     const resetAll = () => {
+      stopIdle();
       lastPointer = null;
       targets.forEach((t) => {
         t.pressedKeys.clear();
-        applyDisplacement(t, 0, 0);
+        setTargetDisplacement(t, 0, 0);
       });
+      scheduleIdle();
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -209,6 +273,7 @@ export default function HoverParallax({
       const mapped =
         KEY_MAP[e.code.toLowerCase()] || KEY_MAP[e.key.toLowerCase()];
       if (mapped) {
+        stopIdle();
         targets.forEach((t) => {
           t.pressedKeys.add(mapped);
           updateTargetFromKeys(t);
@@ -228,12 +293,16 @@ export default function HoverParallax({
           t.pressedKeys.delete(mapped);
           updateTargetFromKeys(t);
         });
+        scheduleIdle();
       }
     };
 
     const onBlur = () => {
       isDisabledGlobally = false;
+      scheduleIdle();
     };
+
+    scheduleIdle();
 
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("resize", onResize);
@@ -243,6 +312,7 @@ export default function HoverParallax({
     window.addEventListener("blur", onBlur);
 
     return () => {
+      stopIdle();
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("resize", onResize);
       document.removeEventListener("mouseleave", resetAll);

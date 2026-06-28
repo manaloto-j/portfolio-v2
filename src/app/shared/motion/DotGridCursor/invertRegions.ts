@@ -1,4 +1,5 @@
-import type { InvertRegion } from "./types";
+import { EXCLUDE_OFFSET } from "./constants";
+import type { ExcludeRegion, InvertRegion } from "./types";
 
 // ─── Colour Utilities ─────────────────────────────────────────────────────────
 
@@ -102,6 +103,38 @@ export function isInsideInvertRegion(
     const py = Math.floor(ly);
     const alphaIdx = (py * imageData.width + px) * 4 + 3;
     if (imageData.data[alphaIdx] > 10) return true;
+  }
+  return false;
+}
+
+export function buildExcludeRegions(): ExcludeRegion[] {
+  return Array.from(
+    document.querySelectorAll<HTMLElement>("[data-dotgridcursor-exclude]"),
+  )
+    .map((el) => el.getBoundingClientRect())
+    .filter((rect) => rect.width > 0 && rect.height > 0)
+    .map((rect) => ({
+      left: rect.left - EXCLUDE_OFFSET,
+      right: rect.right + EXCLUDE_OFFSET,
+      top: rect.top - EXCLUDE_OFFSET,
+      bottom: rect.bottom + EXCLUDE_OFFSET,
+    }));
+}
+
+export function isInsideExcludeRegion(
+  x: number,
+  y: number,
+  regions: ExcludeRegion[],
+): boolean {
+  for (const rect of regions) {
+    if (
+      x >= rect.left &&
+      x <= rect.right &&
+      y >= rect.top &&
+      y <= rect.bottom
+    ) {
+      return true;
+    }
   }
   return false;
 }

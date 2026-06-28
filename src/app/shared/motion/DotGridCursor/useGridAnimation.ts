@@ -6,8 +6,13 @@ import {
   ALPHA_LEVELS, MAX_STEP_PX, SEGMENT_ALPHA_CULL, POOL_SIZE,
   ALPHA_DECAY, SIZE_DECAY,
 } from "./constants";
-import type { Dot, Pos, Seg, Entry, InvertRegion } from "./types";
-import { buildInvertRegions, isInsideInvertRegion } from "./invertRegions";
+import type { Dot, Pos, Seg, Entry, ExcludeRegion, InvertRegion } from "./types";
+import {
+  buildExcludeRegions,
+  buildInvertRegions,
+  isInsideExcludeRegion,
+  isInsideInvertRegion,
+} from "./invertRegions";
 import type { IdleAnimationHandles } from "./useIdleAnimation";
 
 // ─── Internal State Shape ─────────────────────────────────────────────────────
@@ -72,6 +77,7 @@ export function useGridAnimation(
 
     // ── Invert-region management ─────────────────────────────────────────────
     let invertRegions: InvertRegion[] = [];
+    let excludeRegions: ExcludeRegion[] = [];
     let regionsDirty = true;
 
     const markRegionsDirty = () => { regionsDirty = true; };
@@ -80,6 +86,7 @@ export function useGridAnimation(
       if (!regionsDirty) return;
       regionsDirty = false;
       invertRegions = await buildInvertRegions();
+      excludeRegions = buildExcludeRegions();
     };
 
     window.addEventListener("scroll", markRegionsDirty, { passive: true });
@@ -331,6 +338,7 @@ export function useGridAnimation(
       for (let j = 0; j < out.length; j++) {
         const dot = out[j];
         if (dot.maxA < 0.01) continue;
+        if (isInsideExcludeRegion(dot.x, dot.y, excludeRegions)) continue;
 
         const ae = Math.pow(dot.maxA,   1.6);
         const se = Math.pow(dot.maxS,   1.6);

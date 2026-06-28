@@ -109,6 +109,9 @@ You can adjust how much the image moves by overriding the default strength props
 | `invertX` | `boolean` | `false` | Inverts the horizontal movement direction. |
 | `invertY` | `boolean` | `true` | Inverts the vertical movement direction. |
 | `planeScale`| `number` | `1.05` | How much to over-scale the WebGL plane to hide edges during extreme displacement. |
+| `data-3d-idle` | `boolean \| string` | `undefined` | Enables subtle vertical idle motion. |
+
+When `data-3d-idle` is enabled, idle uses `20%` of the configured `strengthY`. Adjust `IDLE_AMPLITUDE` in `useInputHandlers.ts` to tune the idle strength.
 
 ## 4. Fallback Behaviour
 

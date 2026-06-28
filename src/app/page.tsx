@@ -15,6 +15,8 @@ export default function Home() {
             data-parallax-hover
             data-parallax-hover-x="-0.02"
             data-parallax-hover-y="0.03"
+            data-parallax-hover-idle
+            data-3d-idle
           />
         </div>
       </HoverParallax>

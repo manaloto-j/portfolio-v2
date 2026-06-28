@@ -60,3 +60,7 @@ You can control the animation duration (lerp) for each element to change how "he
 <!-- Slow, floaty tracking -->
 <div data-parallax-hover data-parallax-hover-lerp="2">...</div>
 ```
+
+## 5. Idle Motion
+
+Add `data-parallax-hover-idle` to enable subtle vertical idle motion. Idle uses `10%` of the element's configured Y strength, so `data-parallax-hover-y="0.03"` idles at `0.003`, or `0.3%` of the element's height.

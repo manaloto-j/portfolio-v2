@@ -24,6 +24,7 @@ export function ThreeDParallax({
   planeScale = DEFAULT_PLANE_SCALE,
   invertX = false,
   invertY = true,
+  "data-3d-idle": data3DIdle,
   style,
   className,
   ...props
@@ -51,7 +52,14 @@ export function ThreeDParallax({
     { strengthX, strengthY, lerpFactor, planeScale, isMobile },
   );
 
-  useInputHandlers({ targetMouse, wakeRenderRef, invertX, invertY, isMobile });
+  useInputHandlers({
+    targetMouse,
+    wakeRenderRef,
+    invertX,
+    invertY,
+    isMobile,
+    idleEnabled: data3DIdle !== undefined && data3DIdle !== false && data3DIdle !== "false",
+  });
 
   // Only pass the aspect ratio as a CSS custom property — NOT as a
   // presentational inline style — so Tailwind / CSS classes can freely
@@ -66,6 +74,7 @@ export function ThreeDParallax({
       ref={mountRef}
       style={parallaxStyle}
       className={[styles.threeDParallax, className].filter(Boolean).join(" ")}
+      data-3d-idle={data3DIdle}
       {...props}
     >
       {(isMobile || webglFailed) && (

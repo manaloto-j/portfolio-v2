@@ -56,3 +56,11 @@ export interface InvertRegion {
   imageData: ImageData;
   rect: DOMRect;
 }
+
+/** Viewport rectangle where dot-grid cursor dots should not render */
+export interface ExcludeRegion {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
