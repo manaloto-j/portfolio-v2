@@ -2,12 +2,15 @@
 import { useRef } from "react";
 import { invertHex } from "./invertRegions";
 import { useGridAnimation } from "./useGridAnimation";
-import { useIdleAnimation, type IdleAnimationHandles } from "./useIdleAnimation";
+import {
+  useIdleAnimation,
+  type IdleAnimationHandles,
+} from "./useIdleAnimation";
 
 function DotGridLayer({
   color,
   idleHandles,
-  ignorePointer
+  ignorePointer,
 }: {
   color: string;
   idleHandles?: IdleAnimationHandles;
@@ -16,7 +19,14 @@ function DotGridLayer({
   const cvs1 = useRef<HTMLCanvasElement>(null);
   const cvs2 = useRef<HTMLCanvasElement>(null);
 
-  useGridAnimation(cvs1, cvs2, color, invertHex(color), idleHandles, ignorePointer);
+  useGridAnimation(
+    cvs1,
+    cvs2,
+    color,
+    invertHex(color),
+    idleHandles,
+    ignorePointer,
+  );
 
   return (
     <>
@@ -58,14 +68,14 @@ function DotGridLayer({
  * DotGridCursor
  *
  * Renders a reactive dot-grid cursor effect across the full viewport.
- * Now mounts two separate instances: one for normal mouse tracking, 
+ * Now mounts two separate instances: one for normal mouse tracking,
  * and one isolated layer specifically for the idle screensaver animation.
  *
  * @param color - Base dot colour (default: white). The inverted colour is
  *                derived automatically.
  */
 export default function DotGridCursor({
-  color = "#FFFFFF",
+  color = "#FAFAFA",
 }: { color?: string } = {}) {
   const idleHandles = useIdleAnimation();
 
@@ -73,9 +83,13 @@ export default function DotGridCursor({
     <>
       {/* Normal cursor layer: tracks physical mouse, no idle hijacking */}
       <DotGridLayer color={color} />
-      
+
       {/* Idle screensaver layer: ignores mouse, driven entirely by idle timer */}
-      <DotGridLayer color={color} idleHandles={idleHandles} ignorePointer={true} />
+      <DotGridLayer
+        color={color}
+        idleHandles={idleHandles}
+        ignorePointer={true}
+      />
     </>
   );
 }

@@ -25,7 +25,7 @@ const KEY_MAP: Record<string, string> = {
 };
 
 const IDLE_PERIOD_MS = 2400;
-const IDLE_STRENGTH = 0.1;
+const IDLE_STRENGTH = 0.15;
 const DESKTOP_QUERY = "(min-width: 1024px)";
 
 const getIsMobileSnapshot = () =>

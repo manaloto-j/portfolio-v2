@@ -107,19 +107,55 @@ export function isInsideInvertRegion(
   return false;
 }
 
+/**
+ * Builds the list of viewport rectangles where dots must not render.
+ *
+ * Each `[data-dotgridcursor-exclude]` element contributes one region whose
+ * bounds are computed from its **full CSS box model**:
+ *
+ *   content + padding + border  →  getBoundingClientRect()
+ *   + margin (top/right/bottom/left)  →  getComputedStyle()
+ *   + EXCLUDE_OFFSET extra padding    →  constant buffer for visual breathing room
+ *
+ * `getBoundingClientRect()` stops at the border edge; CSS `margin` lives
+ * outside that rect and would otherwise be ignored. Reading the four computed
+ * margin values and subtracting / adding them to the rect edges ensures that
+ * the exclusion zone matches the element's true visual footprint — including
+ * any `margin: auto` centering, negative margins, or fractional sub-pixel
+ * values returned by the browser.
+ *
+ * The resulting `ExcludeRegion` coordinates are in viewport (CSS pixel) space
+ * and are consumed every frame by `isInsideExcludeRegion`.
+ */
 export function buildExcludeRegions(): ExcludeRegion[] {
   return Array.from(
     document.querySelectorAll<HTMLElement>("[data-dotgridcursor-exclude]"),
   )
-    .map((el) => el.getBoundingClientRect())
-    .filter((rect) => rect.width > 0 && rect.height > 0)
-    .map((rect) => ({
-      left: rect.left - EXCLUDE_OFFSET,
-      right: rect.right + EXCLUDE_OFFSET,
-      top: rect.top - EXCLUDE_OFFSET,
-      bottom: rect.bottom + EXCLUDE_OFFSET,
-    }));
+    .filter((el) => {
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    })
+    .map((el) => {
+      const rect   = el.getBoundingClientRect();
+      const styles = window.getComputedStyle(el);
+
+      // Parse a computed CSS length value (e.g. "16px", "0px", "auto") to a
+      // number. `parseFloat` returns NaN for "auto" / non-numeric strings, so
+      // we fall back to 0 — which is the correct effective margin for "auto".
+      const mt = parseFloat(styles.marginTop)    || 0;
+      const mr = parseFloat(styles.marginRight)  || 0;
+      const mb = parseFloat(styles.marginBottom) || 0;
+      const ml = parseFloat(styles.marginLeft)   || 0;
+
+      return {
+        left:   rect.left   - ml - EXCLUDE_OFFSET,
+        right:  rect.right  + mr + EXCLUDE_OFFSET,
+        top:    rect.top    - mt - EXCLUDE_OFFSET,
+        bottom: rect.bottom + mb + EXCLUDE_OFFSET,
+      };
+    });
 }
+
 
 export function isInsideExcludeRegion(
   x: number,

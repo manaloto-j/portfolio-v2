@@ -1,58 +1,93 @@
-@import "tailwindcss";
+  @import "tailwindcss";
 
-:root {
-  /* Colors */
-  --color-white-50: #ffffff;
-  --color-white-100: #fafafa;
-  --color-crimson-800: #ff879f;
-  --color-crimson-950: #dc143c;
-  --color-black-800: #111111;
-  --color-black-950: #000000;
+  @font-face {
+    font-family: "Satoshi";
+    src:
+      url("../assets/fonts/Satoshi-Regular.woff2") format("woff2"),
+      url("../assets/fonts/Satoshi-Regular.woff") format("woff");
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+  }
 
-  /* Spacing */
-  --spacing-24: 24px;
-  --spacing-48: 48px;
-  --spacing-96: 96px;
-  --spacing-128: 128px;
+  @font-face {
+    font-family: "Satoshi";
+    src:
+      url("../assets/fonts/Satoshi-Bold.woff2") format("woff2"),
+      url("../assets/fonts/Satoshi-Bold.woff") format("woff");
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+  }
 
-  /* Min / Max Width */
-  --container-1440: 1440px;
-}
+  @font-face {
+    font-family: "Satoshi";
+    src:
+      url("../assets/fonts/Satoshi-Black.woff2") format("woff2"),
+      url("../assets/fonts/Satoshi-Black.woff") format("woff");
+    font-style: normal;
+    font-weight: 900;
+    font-display: swap;
+  }
 
-@theme {
-  /* Colors */
-  --color-white-50: #ffffff;
-  --color-white-100: #fafafa;
-  --color-crimson-800: #ff879f;
-  --color-crimson-950: #dc143c;
-  --color-black-800: #111111;
-  --color-black-950: #000000;
+  :root {
+    /* Colors */
+    --color-white-50: #ffffff;
+    --color-white-100: #fafafa;
+    --color-crimson-800: #ff879f;
+    --color-crimson-950: #dc143c;
+    --color-black-800: #111111;
+    --color-black-900: #101010;
+    --color-black-950: #000000;
 
-  /* Spacing */
-  --spacing-24: 24px;
-  --spacing-48: 48px;
-  --spacing-96: 96px;
-  --spacing-128: 128px;
-}
+    /* Spacing */
+    --spacing-24: 24px;
+    --spacing-48: 48px;
+    --spacing-96: 96px;
+    --spacing-128: 128px;
 
-* {
-  box-sizing: border-box;
-}
+    /* Min / Max Width */
+    --container-1440: 1440px;
+  }
 
-html {
-  background-color: var(--color-black-800);
-  padding-inline: var(--spacing-48);
-}
+  @theme {
+    /* Colors */
+    --color-white-50: #ffffff;
+    --color-white-100: #fafafa;
+    --color-crimson-800: #ff879f;
+    --color-crimson-950: #dc143c;
+    --color-black-800: #111111;
+    --color-black-900: #101010;
+    --color-black-900: #000000;
 
-body {
-  margin-block: 24px;
-  margin-inline: auto;
-  width: 100%;
-  max-width: 1920px;
-  overflow-x: hidden;
-}
+    /* Spacing */
+    --spacing-24: 24px;
+    --spacing-48: 48px;
+    --spacing-96: 96px;
+    --spacing-128: 128px;
 
-section {
-  width: 100%;
-  height: 100vh;
-}
+    --text-18: 18px;
+    --font-satoshi: "Satoshi", sans-serif;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    background-color: var(--color-black-900);
+    margin-inline: var(--spacing-48);
+  }
+
+  body {
+    margin-block: 24px;
+    margin-inline: auto;
+    width: 100%;
+    max-width: 1920px;
+    overflow-x: hidden;
+  }
+
+  section {
+    width: 100%;
+    height: 100vh;
+  }
