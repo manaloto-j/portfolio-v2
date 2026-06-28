@@ -5,7 +5,7 @@ import HoverParallax from "./shared/motion/HoverParallax/HoverParallax";
 
 export default function Home() {
   return (
-    <section className="relative overflow-hidden">
+    <section className="relative overflow-hidden" data-gridcursor-idle>
       <HoverParallax>
         {/* Image Wrapper */}
         <div className="h-screen w-full">
@@ -15,7 +15,6 @@ export default function Home() {
             data-parallax-hover
             data-parallax-hover-x="-0.02"
             data-parallax-hover-y="0.03"
-            data-dot-invert
           />
         </div>
       </HoverParallax>

@@ -1,9 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import DotGridCursor, {
-  DotGridCursorProps,
-} from "./shared/motion/DotGridCursor";
+import DotGridCursor from "./shared/motion/DotGridCursor";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
