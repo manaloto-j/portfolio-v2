@@ -201,7 +201,7 @@ export default function JMLogo({ className = "", width, height }: JMLogoProps) {
   if (!isMounted) {
     return (
       <div
-        className={`w-8 h-8 flex items-center justify-center ${className}`}
+        className={`w-6 h-6 flex items-center justify-center ${className}`}
         style={{ width, height }}
       >
         {fallbackSvg}
@@ -213,7 +213,7 @@ export default function JMLogo({ className = "", width, height }: JMLogoProps) {
     <div
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
-      className={`relative select-none w-8 h-8 ${className}`}
+      className={`relative select-none w-6 h-6 ${className}`}
       style={{ width, height }}
     >
       <style
