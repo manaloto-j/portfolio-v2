@@ -2,6 +2,8 @@
    Note: Since we want user-provided Tailwind classes to easily override these styles,
    the class properties use the CSS custom property `--parallax-aspect`. */
 .threeDParallax {
+  position: relative;
+  overflow: hidden;
   display: block;
   aspect-ratio: var(--parallax-aspect);
 }

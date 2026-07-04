@@ -1,16 +1,21 @@
+"use client";
+
 import ThreeDParallax from "@/app/shared/motion/3DParallax/index";
 import profileParallax from "@/assets/images/profileImg/profile-parallax";
-import toothParallax from "@/assets/images/depthTest/tooth-parallax";
 import HoverParallax from "./shared/motion/HoverParallax/HoverParallax";
 import NavBar from "./shared/navigation/NavBar";
+import { useIdleAnimation } from "./shared/motion/FluidCursor/useIdleAnimation";
 
 export default function Home() {
+  useIdleAnimation();
+
   return (
     <div>
       <NavBar />
       <section
         className="relative overflow-hidden h-screen w-screen"
         data-gridcursor-idle
+        data-halftone-idle
       >
         <HoverParallax>
           {/* Image Wrapper */}

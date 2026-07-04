@@ -75,12 +75,11 @@
   }
 
   html {
-    background-color: var(--color-black-900);
+    background-color: var(--color-black-950);
     margin-inline: var(--spacing-48);
   }
 
   body {
-    margin-block: 24px;
     margin-inline: auto;
     width: 100%;
     max-width: 1920px;

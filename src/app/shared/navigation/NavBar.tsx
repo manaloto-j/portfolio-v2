@@ -1,3 +1,5 @@
+"use client";
+
 import Link from "next/link";
 import { Logo } from "@/assets/svgs/index";
 
@@ -5,7 +7,10 @@ export default function NavBar() {
   const navLink = "text-white-100 text-18 font-satoshi";
 
   return (
-    <nav className="fixed top-24 left-0 w-full px-12 flex items-center justify-between z-50">
+    <nav
+      className="fixed py-24 left-0 w-full px-12 flex items-center justify-between z-50"
+      data-halftone-ignore
+    >
       <div className={`${navLink} leading-tight`}>
         <p>JOHNZELLE</p>
         <p>MANALOTO</p>

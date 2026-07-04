@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useSyncExternalStore } from "react";
 import type { CSSProperties } from "react";
 import {
   MOBILE_BREAKPOINT,
@@ -32,18 +32,15 @@ export function ThreeDParallax({
   const mountRef = useRef<HTMLDivElement>(null);
   const targetMouse = useRef({ x: 0, y: 0 });
 
-  // Detect mobile/tablet: treat anything below 1024px as a non-WebGL device.
-  // Default to true (mobile-first) so the WebGL effect never flashes before
-  // the media query resolves on first render.
-  const [isMobile, setIsMobile] = useState(true);
-
-  useEffect(() => {
-    const mq = window.matchMedia(MOBILE_BREAKPOINT);
-    setIsMobile(!mq.matches);
-    const handler = (e: MediaQueryListEvent) => setIsMobile(!e.matches);
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
-  }, []);
+  const isMobile = useSyncExternalStore(
+    (onStoreChange) => {
+      const mq = window.matchMedia(MOBILE_BREAKPOINT);
+      mq.addEventListener("change", onStoreChange);
+      return () => mq.removeEventListener("change", onStoreChange);
+    },
+    () => !window.matchMedia(MOBILE_BREAKPOINT).matches,
+    () => true,
+  );
 
   const { webglFailed, wakeRenderRef } = useWebGLRenderer(
     mountRef,
@@ -85,7 +82,7 @@ export function ThreeDParallax({
           src={getImageSrc(color)}
           alt=""
           aria-hidden="true"
-          className="w-full h-full object-cover"
+          className="absolute inset-0 h-full w-full object-cover"
         />
       )}
     </div>

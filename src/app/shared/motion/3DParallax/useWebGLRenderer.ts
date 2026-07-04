@@ -76,6 +76,8 @@ export function useWebGLRenderer(
       if (isDestroyed) return;
 
       canvas = document.createElement("canvas");
+      canvas.style.position = "absolute";
+      canvas.style.inset = "0";
       canvas.style.display = "block";
       canvas.style.width = "100%";
       canvas.style.height = "100%";

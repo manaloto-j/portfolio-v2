@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import DotGridCursor from "./shared/motion/DotGridCursor";
+import HalftoneTrail from "./shared/motion/FluidCursor/Halftonetrail";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -30,7 +30,7 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         {children}
-        <DotGridCursor />
+        <HalftoneTrail />
       </body>
     </html>
   );
