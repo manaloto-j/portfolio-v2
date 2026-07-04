@@ -30,17 +30,14 @@ export default function JMLogo({ className = "", width, height }: JMLogoProps) {
 
   // Mark mounted on client-side
   useEffect(() => {
-    setIsMounted(true);
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setIsMounted(true);
+    });
     return () => {
-      // Cleanup on unmount
+      cancelled = true;
       if (rafId.current) {
         cancelAnimationFrame(rafId.current);
-      }
-      if (animForward.current) {
-        animForward.current.destroy();
-      }
-      if (animReverse.current) {
-        animReverse.current.destroy();
       }
     };
   }, []);
@@ -122,26 +119,29 @@ export default function JMLogo({ className = "", width, height }: JMLogoProps) {
     });
   };
 
-  // Initialize animations once mounted on client side
+  // Initialize animations once mounted on client side.
+  // The callback refs are intentionally captured once at mount time.
   useEffect(() => {
     if (!isMounted) return;
 
     if (containerForwardRef.current && containerReverseRef.current) {
-      animForward.current = lottie.loadAnimation({
+      const forwardAnim = lottie.loadAnimation({
         container: containerForwardRef.current,
         renderer: "svg",
         loop: false,
         autoplay: false,
         animationData: logoAnimData,
       });
+      animForward.current = forwardAnim;
 
-      animReverse.current = lottie.loadAnimation({
+      const reverseAnim = lottie.loadAnimation({
         container: containerReverseRef.current,
         renderer: "svg",
         loop: false,
         autoplay: false,
         animationData: logoAnimReverseData,
       });
+      animReverse.current = reverseAnim;
 
       // Play initial forward animation on page load
       const onDomLoaded = () => {
@@ -154,14 +154,15 @@ export default function JMLogo({ className = "", width, height }: JMLogoProps) {
         });
       };
 
-      animForward.current.addEventListener("DOMLoaded", onDomLoaded);
+      forwardAnim.addEventListener("DOMLoaded", onDomLoaded);
 
       return () => {
-        if (animForward.current) {
-          animForward.current.removeEventListener("DOMLoaded", onDomLoaded);
-        }
+        forwardAnim.removeEventListener("DOMLoaded", onDomLoaded);
+        forwardAnim.destroy();
+        reverseAnim.destroy();
       };
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMounted]);
 
   const handleMouseEnter = () => {
