@@ -8,8 +8,8 @@
  * for IDLE_TIMEOUT_MS — this hook scripts a virtual cursor along a fixed
  * dash path across a target element, and dispatches genuine `pointermove`
  * events on `window` at each animation frame. It then loops: once the
- * dash sequence finishes, it waits out another IDLE_TIMEOUT_MS and plays
- * again, for as long as the page stays idle.
+ * dash sequence finishes, it waits out DELAY_BEFORE_NEXT_PLAY_MS and plays
+ * again, repeating until real input resumes.
  *
  * Because HalftoneTrail already listens for `pointermove` on `window`, it
  * animates automatically — no changes to halftone-trail.tsx are required.
@@ -66,7 +66,9 @@ export interface Pos {
 // ─── Timing ──────────────────────────────────────────────────────────────────
 
 /** Idle time (ms) before the screensaver kicks in. */
-const IDLE_TIMEOUT_MS = 2500;
+const IDLE_TIMEOUT_MS = 5000;
+/** Delay (ms) between a completed playback and the next pass. */
+const DELAY_BEFORE_NEXT_PLAY_MS = 1000;
 /** Duration (ms) of a single dash stroke. */
 const DASH_DURATION_MS = 300;
 /** Hold (ms) at the shared endpoint between consecutive dashes. */
@@ -168,13 +170,14 @@ export function useIdleAnimation(): IdleAnimationHandles {
   const idleActiveRef = useRef<boolean>(false);
   const idlePosRef = useRef<Pos | null>(null);
 
-  const startTimerRef = useRef<() => void>(() => {});
+  const startTimerRef = useRef<(delayMs: number) => void>(() => {});
 
   const getIdlePos = (): Pos | null => idlePosRef.current;
 
   useEffect(() => {
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
     let rafId: number | null = null;
+    let nextPlaybackIsReversed = false;
     const visibleIdleTargets = new Set<Element>();
 
     const observer = new IntersectionObserver(
@@ -216,6 +219,8 @@ export function useIdleAnimation(): IdleAnimationHandles {
       if (targets.length === 0) return; // No idle target in view, do nothing
 
       const el = targets[0];
+      const isReversed = nextPlaybackIsReversed;
+      nextPlaybackIsReversed = !nextPlaybackIsReversed;
       const rect = usesViewportFrame(el)
         ? {
             left: 0,
@@ -229,8 +234,8 @@ export function useIdleAnimation(): IdleAnimationHandles {
       // Convert fractional waypoints to element pixel positions.
       const pts = WAYPOINTS.map(
         ([xf, yf]): Pos => ({
-          x: l + xf * w,
-          y: t + yf * h,
+          x: l + (isReversed ? 1 - xf : xf) * w,
+          y: t + (isReversed ? 1 - yf : yf) * h,
         }),
       );
 
@@ -249,9 +254,8 @@ export function useIdleAnimation(): IdleAnimationHandles {
           idleActiveRef.current = false;
           rafId = null;
 
-          // Re-trigger the timer immediately so it can loop after
-          // IDLE_TIMEOUT_MS of continued idle.
-          startTimerRef.current();
+          // Re-trigger the timer so the next pass starts after a short beat.
+          startTimerRef.current(DELAY_BEFORE_NEXT_PLAY_MS);
 
           return;
         }
@@ -277,25 +281,27 @@ export function useIdleAnimation(): IdleAnimationHandles {
       rafId = requestAnimationFrame(tick);
     };
 
-    startTimerRef.current = () => {
+    startTimerRef.current = (delayMs: number) => {
       if (idleTimer !== null) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
         idleTimer = null;
         playIdle();
-      }, IDLE_TIMEOUT_MS);
+      }, delayMs);
     };
 
     const onPointerMove = (e: Event) => {
       // Ignore movement we generated ourselves — only real input should
       // postpone the next screensaver playback.
       if ((e as unknown as Record<string, boolean>)[SYNTHETIC_FLAG]) return;
-      startTimerRef.current();
+      clearAnimation();
+      nextPlaybackIsReversed = false;
+      startTimerRef.current(IDLE_TIMEOUT_MS);
     };
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("touchmove", onPointerMove, { passive: true });
 
     // Kick off initial timer
-    startTimerRef.current();
+    startTimerRef.current(IDLE_TIMEOUT_MS);
 
     return () => {
       observer.disconnect();

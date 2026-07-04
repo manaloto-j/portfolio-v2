@@ -11,9 +11,13 @@ export default function NavBar() {
       className="fixed py-24 left-0 w-full px-12 flex items-center justify-between z-50"
       data-halftone-ignore
     >
-      <div className={`${navLink} leading-tight`}>
-        <p>JOHNZELLE</p>
-        <p>MANALOTO</p>
+      <div className={`${navLink} leading-[80%] text-center text-[24px]`}>
+        <p>
+          <b>JOHNZELLE</b>
+        </p>
+        <p>
+          <i>MANALOTO</i>
+        </p>
       </div>
 
       <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center">
