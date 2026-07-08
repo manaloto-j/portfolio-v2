@@ -1,0 +1,695 @@
+"use client";
+
+import React, { useEffect, useRef, useState } from "react";
+
+const VERT_SHADER = `
+  attribute vec2 position;
+  varying vec2 vUv;
+  void main() {
+    vUv = position * 0.5 + 0.5;
+    gl_Position = vec4(position, 0.0, 1.0);
+  }
+`;
+
+const TRAIL_FRAG = `
+  precision mediump float;
+  uniform sampler2D uPrevTrail;
+  uniform vec2 uMouse;
+  uniform vec2 uMouseDir;
+  uniform float uVelocity;
+  uniform float uDecay;
+  uniform float uBrushSize;
+  uniform float uAspect;
+  uniform float uReveal;
+  varying vec2 vUv;
+
+  void main() {
+    float prev = texture2D(uPrevTrail, vUv).r * uDecay;
+    vec2 delta = vUv - uMouse;
+    delta.x *= uAspect;
+
+    vec2 dir = length(uMouseDir) > 0.001 ? uMouseDir : vec2(0.0, 1.0);
+    float along = dot(delta, dir);
+    float perp = length(delta - along * dir);
+    float elongation = 1.0 + uVelocity * 2.0;
+    float blobDist = sqrt(along * along / elongation + perp * perp);
+
+    float blob = exp(-blobDist * blobDist / (uBrushSize * uBrushSize)) * uReveal;
+    gl_FragColor = vec4(min(prev + blob, 1.0), 0.0, 0.0, 1.0);
+  }
+`;
+
+// Halftone pass now uses the same ordered (Bayer-matrix) dithering
+// algorithm as ShaderBackground, instead of smooth radius-based circles.
+// This makes the cursor trail's dot texture visually consistent with the
+// page background's dot texture — same dithering "grain", just driven by
+// trail density instead of simplex noise.
+const HALFTONE_FRAG = `
+  precision highp float;
+  uniform sampler2D uTrailTexture;
+  uniform float uScale;
+  uniform vec3 uColor;
+  uniform float uOpacity;
+  varying vec2 vUv;
+
+  float Bayer2(vec2 a) {
+    a = floor(a);
+    return fract(a.x / 2.0 + a.y * a.y * 0.75);
+  }
+  #define Bayer4(a)  (Bayer2(0.5 * (a)) * 0.25 + Bayer2(a))
+  #define Bayer8(a)  (Bayer4(0.5 * (a)) * 0.25 + Bayer2(a))
+  #define Bayer16(a) (Bayer8(0.5 * (a)) * 0.25 + Bayer2(a))
+  #define Bayer32(a) (Bayer16(0.5 * (a)) * 0.25 + Bayer2(a))
+
+  void main() {
+    float density = texture2D(uTrailTexture, vUv).r;
+    float d = step(Bayer32(gl_FragCoord.xy * uScale), density);
+    gl_FragColor = vec4(uColor, d * uOpacity);
+  }
+`;
+
+// --- Configurable constants ---
+
+// Side length (in texels) of the square trail texture used for the ping-pong
+// FBOs. Higher = smoother/more precise trails at the cost of GPU memory and
+// fill-rate; lower = cheaper but blockier trails. Does not affect the visible
+// on-screen resolution, since the halftone pass samples this texture and
+// reconstructs dots at full canvas resolution regardless of this value.
+const TRAIL_TEXTURE_SIDE = 512;
+
+// --- Pure helpers (module-level, never recreated) ---
+
+function lerp(a: number, b: number, t: number) {
+  return a + (b - a) * t;
+}
+
+function compileShader(
+  gl: WebGLRenderingContext,
+  source: string,
+  type: number,
+): WebGLShader | null {
+  const shader = gl.createShader(type);
+  if (!shader) return null;
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    console.error(gl.getShaderInfoLog(shader));
+    gl.deleteShader(shader);
+    return null;
+  }
+  return shader;
+}
+
+function linkProgram(
+  gl: WebGLRenderingContext,
+  vsSource: string,
+  fsSource: string,
+): WebGLProgram | null {
+  const vs = compileShader(gl, vsSource, gl.VERTEX_SHADER);
+  const fs = compileShader(gl, fsSource, gl.FRAGMENT_SHADER);
+  if (!vs || !fs) return null;
+  const prog = gl.createProgram();
+  if (!prog) return null;
+  gl.attachShader(prog, vs);
+  gl.attachShader(prog, fs);
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error(gl.getProgramInfoLog(prog));
+    gl.deleteProgram(prog);
+    return null;
+  }
+  return prog;
+}
+
+function createFBO(gl: WebGLRenderingContext, w: number, h: number) {
+  const texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texImage2D(
+    gl.TEXTURE_2D,
+    0,
+    gl.RGBA,
+    w,
+    h,
+    0,
+    gl.RGBA,
+    gl.UNSIGNED_BYTE,
+    null,
+  );
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  const fb = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.framebufferTexture2D(
+    gl.FRAMEBUFFER,
+    gl.COLOR_ATTACHMENT0,
+    gl.TEXTURE_2D,
+    texture,
+    0,
+  );
+  return { fb, texture };
+}
+
+// Resolves CSS color strings (including var(--x) and oklch()) to normalized [r,g,b].
+// Uses a live DOM element so getComputedStyle resolves variables against the active theme,
+// then a 1x1 canvas to convert whatever color space the browser returns into sRGB bytes.
+const probeCtx =
+  typeof document !== "undefined"
+    ? document.createElement("canvas").getContext("2d")
+    : null;
+
+function resolveColor(
+  el: HTMLElement,
+  colorStr: string,
+): [number, number, number] {
+  el.style.color = colorStr;
+  const computed = getComputedStyle(el).color;
+  if (!probeCtx) return [0.5, 0.5, 0.5];
+  probeCtx.fillStyle = computed;
+  probeCtx.fillRect(0, 0, 1, 1);
+  const [r, g, b] = probeCtx.getImageData(0, 0, 1, 1).data;
+  return [r / 255, g / 255, b / 255];
+}
+
+// --- WebGL engine (framework-agnostic) ---
+
+interface EngineConfig {
+  decay: number;
+  brushSize: number;
+  hoverBrushSize: number;
+  opacity: number;
+  hoverOpacity: number;
+  speedScale: number;
+  // Bayer-dither cell scale, same units/semantics as ShaderBackground's
+  // `scale` prop — multiplies gl_FragCoord before it's fed into the Bayer
+  // matrix. Smaller = larger dither cells, larger = finer grain.
+  scale: number;
+  hoverSelector: string;
+  trailResolution: number;
+  // Milliseconds of no pointer movement after which the trail stops being
+  // fed and is left to decay to nothing, instead of persisting forever at
+  // the last mouse position. Set to Infinity to disable this behavior.
+  idleTimeout: number;
+}
+
+class HalftoneTrailEngine {
+  private gl: WebGLRenderingContext;
+  private trailProgram: WebGLProgram;
+  private halftoneProgram: WebGLProgram;
+  private positionBuffer: WebGLBuffer;
+  private fboA: { fb: WebGLFramebuffer | null; texture: WebGLTexture | null };
+  private fboB: { fb: WebGLFramebuffer | null; texture: WebGLTexture | null };
+  private rafId = 0;
+  private running = false;
+  private config: EngineConfig;
+
+  // Uniform locations — trail
+  private tPrevLoc: WebGLUniformLocation | null;
+  private tMouseLoc: WebGLUniformLocation | null;
+  private tMouseDirLoc: WebGLUniformLocation | null;
+  private tVelocityLoc: WebGLUniformLocation | null;
+  private tDecayLoc: WebGLUniformLocation | null;
+  private tBrushLoc: WebGLUniformLocation | null;
+  private tAspectLoc: WebGLUniformLocation | null;
+  private tRevealLoc: WebGLUniformLocation | null;
+  private tPosLoc: number;
+
+  // Uniform locations — halftone
+  private hTrailLoc: WebGLUniformLocation | null;
+  private hScaleLoc: WebGLUniformLocation | null;
+  private hColorLoc: WebGLUniformLocation | null;
+  private hOpacityLoc: WebGLUniformLocation | null;
+  private hPosLoc: number;
+
+  // Animated state
+  private width = 0;
+  private height = 0;
+  private mouseX = 0.5;
+  private mouseY = 0.5;
+  private prevX = 0.5;
+  private prevY = 0.5;
+  private dirX = 0;
+  private dirY = 1;
+  private velocity = 0;
+  private hovering = false;
+  private reveal = 0;
+  private currentBrushSize: number;
+  private currentOpacity: number;
+  private colorRGB: [number, number, number] = [0.5, 0.5, 0.5];
+
+  // Cached per-resize values (avoid recomputing every frame)
+  private dpr = 1;
+  private aspect = 1;
+
+  // Latest raw pointer event, applied once per rendered frame instead of
+  // once per pointermove event (which can fire multiple times per frame).
+  private pendingPointer: {
+    clientX: number;
+    clientY: number;
+    rect: DOMRect;
+  } | null = null;
+
+  // Timestamp of the last real pointer movement, used to detect inactivity
+  // and let the trail decay away instead of persisting indefinitely.
+  private lastActivity =
+    typeof performance !== "undefined" ? performance.now() : Date.now();
+
+  constructor(canvas: HTMLCanvasElement, config: EngineConfig) {
+    this.config = config;
+    this.currentBrushSize = config.brushSize;
+    this.currentOpacity = config.opacity;
+
+    // premultipliedAlpha:false matches the shader's straight-alpha output (vec4(color, alpha))
+    const gl = canvas.getContext("webgl", {
+      alpha: true,
+      premultipliedAlpha: false,
+    });
+    if (!gl) throw new Error("WebGL unavailable");
+    this.gl = gl;
+
+    const trailProgram = linkProgram(gl, VERT_SHADER, TRAIL_FRAG);
+    const halftoneProgram = linkProgram(gl, VERT_SHADER, HALFTONE_FRAG);
+    if (!trailProgram || !halftoneProgram)
+      throw new Error("Shader compilation failed");
+    this.trailProgram = trailProgram;
+    this.halftoneProgram = halftoneProgram;
+
+    this.tPosLoc = gl.getAttribLocation(trailProgram, "position");
+    this.tPrevLoc = gl.getUniformLocation(trailProgram, "uPrevTrail");
+    this.tMouseLoc = gl.getUniformLocation(trailProgram, "uMouse");
+    this.tMouseDirLoc = gl.getUniformLocation(trailProgram, "uMouseDir");
+    this.tVelocityLoc = gl.getUniformLocation(trailProgram, "uVelocity");
+    this.tDecayLoc = gl.getUniformLocation(trailProgram, "uDecay");
+    this.tBrushLoc = gl.getUniformLocation(trailProgram, "uBrushSize");
+    this.tAspectLoc = gl.getUniformLocation(trailProgram, "uAspect");
+    this.tRevealLoc = gl.getUniformLocation(trailProgram, "uReveal");
+
+    this.hPosLoc = gl.getAttribLocation(halftoneProgram, "position");
+    this.hTrailLoc = gl.getUniformLocation(halftoneProgram, "uTrailTexture");
+    this.hScaleLoc = gl.getUniformLocation(halftoneProgram, "uScale");
+    this.hColorLoc = gl.getUniformLocation(halftoneProgram, "uColor");
+    this.hOpacityLoc = gl.getUniformLocation(halftoneProgram, "uOpacity");
+
+    const side = this.config.trailResolution;
+    this.fboA = createFBO(gl, side, side);
+    this.fboB = createFBO(gl, side, side);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboA.fb);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboB.fb);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    const buf = gl.createBuffer();
+    if (!buf) throw new Error("Buffer creation failed");
+    this.positionBuffer = buf;
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]),
+      gl.STATIC_DRAW,
+    );
+
+    // Blend state doesn't change frame to frame — set it once instead of
+    // re-issuing gl.enable/gl.blendFunc on every tick().
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.clearColor(0, 0, 0, 0);
+
+    this.tick = this.tick.bind(this);
+    this.start();
+  }
+
+  start() {
+    if (this.running) return;
+    this.running = true;
+    this.rafId = requestAnimationFrame(this.tick);
+  }
+
+  stop() {
+    this.running = false;
+    cancelAnimationFrame(this.rafId);
+  }
+
+  // Called on every raw pointermove — cheap, no DOM hit-testing here.
+  // The actual work (including elementFromPoint) happens once per frame in tick().
+  queuePointer(clientX: number, clientY: number, containerRect: DOMRect) {
+    this.pendingPointer = { clientX, clientY, rect: containerRect };
+    this.lastActivity = performance.now();
+  }
+
+  // Marks the pointer as inactive right away (e.g. it left the browser
+  // window or the tab lost focus), instead of waiting for idleTimeout to
+  // elapse. The trail will start decaying on the very next rendered frame.
+  markInactive() {
+    this.lastActivity = -Infinity;
+  }
+
+  // Instantly clears the trail and resets the fade-in state. Used when the
+  // element is hidden (tab backgrounded, scrolled off-screen) so it comes
+  // back blank and fades in fresh, rather than reappearing with whatever
+  // stale trail was frozen at the moment it was hidden.
+  hardReset() {
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboA.fb);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboB.fb);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    this.reveal = 0;
+    this.lastActivity = -Infinity;
+  }
+
+  private applyPointer(
+    clientX: number,
+    clientY: number,
+    containerRect: DOMRect,
+  ) {
+    this.prevX = this.mouseX;
+    this.prevY = this.mouseY;
+    this.mouseX = (clientX - containerRect.left) / this.width;
+    this.mouseY = 1.0 - (clientY - containerRect.top) / this.height;
+
+    const dx = (this.mouseX - this.prevX) * this.aspect;
+    const dy = this.mouseY - this.prevY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    this.velocity = Math.min(this.config.speedScale * dist, 1.0);
+    if (dist > 1e-4) {
+      this.dirX = dx / dist;
+      this.dirY = dy / dist;
+    }
+
+    // Hit-testing is the most expensive part of pointer handling (forces
+    // layout). Skip it entirely if no ignore selector was configured.
+    this.hovering = this.config.hoverSelector
+      ? !!document
+          .elementFromPoint(clientX, clientY)
+          ?.closest(this.config.hoverSelector)
+      : false;
+  }
+
+  resize(w: number, h: number, dpr: number) {
+    this.width = w;
+    this.height = h;
+    this.dpr = dpr;
+    this.aspect = w / h || 1;
+  }
+
+  setColor(rgb: [number, number, number]) {
+    this.colorRGB = rgb;
+  }
+
+  private tick() {
+    if (!this.running) return;
+
+    // Apply at most one pointer update per rendered frame. Intermediate
+    // pointermove events between frames are coalesced into the latest one,
+    // matching what was already effectively visible before (tick() only
+    // ever read the most recent mouseX/mouseY at render time).
+    if (this.pendingPointer) {
+      const { clientX, clientY, rect } = this.pendingPointer;
+      this.pendingPointer = null;
+      this.applyPointer(clientX, clientY, rect);
+    }
+
+    const gl = this.gl;
+    const side = this.config.trailResolution;
+
+    const idle =
+      performance.now() - this.lastActivity > this.config.idleTimeout;
+    // When idle, fade uReveal toward 0 so the shader stops adding new blob
+    // each frame — only then does the existing 0.97 decay actually shrink
+    // the trail instead of it sitting in equilibrium at the last position.
+    this.reveal = lerp(this.reveal, idle ? 0.0 : 1.0, idle ? 0.05 : 0.1);
+    const targetBrush = this.hovering
+      ? this.config.hoverBrushSize
+      : this.config.brushSize;
+    this.currentBrushSize = lerp(this.currentBrushSize, targetBrush, 0.08);
+    const targetOpacity = this.hovering
+      ? this.config.hoverOpacity
+      : this.config.opacity;
+    this.currentOpacity = lerp(this.currentOpacity, targetOpacity, 0.08);
+    this.velocity *= 0.9;
+
+    // Pass 1: trail update into FBO B
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboB.fb);
+    gl.viewport(0, 0, side, side);
+    gl.useProgram(this.trailProgram);
+    gl.enableVertexAttribArray(this.tPosLoc);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
+    gl.vertexAttribPointer(this.tPosLoc, 2, gl.FLOAT, false, 0, 0);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.fboA.texture);
+    gl.uniform1i(this.tPrevLoc, 0);
+    gl.uniform2f(this.tMouseLoc, this.mouseX, this.mouseY);
+    gl.uniform2f(this.tMouseDirLoc, this.dirX, this.dirY);
+    gl.uniform1f(this.tVelocityLoc, this.velocity);
+    gl.uniform1f(this.tDecayLoc, this.config.decay);
+    gl.uniform1f(this.tBrushLoc, this.currentBrushSize);
+    gl.uniform1f(this.tAspectLoc, this.aspect);
+    gl.uniform1f(this.tRevealLoc, this.reveal);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+    const tmp = this.fboA;
+    this.fboA = this.fboB;
+    this.fboB = tmp;
+
+    // Pass 2: halftone (Bayer dither) to screen
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, this.width * this.dpr, this.height * this.dpr);
+    gl.useProgram(this.halftoneProgram);
+    gl.enableVertexAttribArray(this.hPosLoc);
+    gl.vertexAttribPointer(this.hPosLoc, 2, gl.FLOAT, false, 0, 0);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.fboA.texture);
+    gl.uniform1i(this.hTrailLoc, 0);
+    gl.uniform1f(this.hScaleLoc, this.config.scale);
+    gl.uniform3f(
+      this.hColorLoc,
+      this.colorRGB[0],
+      this.colorRGB[1],
+      this.colorRGB[2],
+    );
+    gl.uniform1f(this.hOpacityLoc, this.currentOpacity);
+
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+    this.rafId = requestAnimationFrame(this.tick);
+  }
+
+  destroy() {
+    this.stop();
+    const gl = this.gl;
+    gl.deleteFramebuffer(this.fboA.fb);
+    gl.deleteFramebuffer(this.fboB.fb);
+    gl.deleteTexture(this.fboA.texture);
+    gl.deleteTexture(this.fboB.texture);
+    gl.deleteBuffer(this.positionBuffer);
+    gl.deleteProgram(this.trailProgram);
+    gl.deleteProgram(this.halftoneProgram);
+  }
+}
+
+// --- React component ---
+
+export interface HalftoneTrailProps {
+  /**
+   * Bayer-dither cell scale — same units/semantics as ShaderBackground's
+   * `scale` prop, so the two components can be tuned to match. Smaller
+   * values = larger, chunkier dither cells; larger values = finer grain.
+   */
+  scale?: number;
+  color?: string;
+  decay?: number;
+  brushSize?: number;
+  hoverBrushSize?: number;
+  opacity?: number;
+  hoverOpacity?: number;
+  speedScale?: number;
+  /**
+   * Elements matching this selector suppress the hover fade-out behavior.
+   * Defaults to `[data-halftone-ignore]`.
+   */
+  hoverSelector?: string;
+  className?: string;
+  /**
+   * Side length (in texels) of the square trail texture. Defaults to
+   * TRAIL_TEXTURE_SIDE (512). Lower values save GPU memory/fill-rate;
+   * higher values give finer trail precision. This does not change the
+   * on-screen dot resolution, only the internal trail buffer.
+   */
+  trailResolution?: number;
+  /**
+   * Milliseconds of no pointer movement before the trail starts fading
+   * away instead of persisting at the last mouse position. Also triggered
+   * immediately (ignoring this timeout) when the pointer leaves the
+   * browser window or the tab loses focus. Defaults to 500. Pass Infinity
+   * to disable inactivity fade-out entirely.
+   */
+  idleTimeout?: number;
+}
+
+export const HalftoneTrail: React.FC<HalftoneTrailProps> = ({
+  scale = 0.5,
+  color = "#E0E0E0",
+  decay = 0.97,
+  brushSize = 0.06,
+  hoverBrushSize = 0.015,
+  opacity = 1.0,
+  hoverOpacity = 0.2,
+  speedScale = 35.0,
+  hoverSelector = "[data-halftone-ignore]",
+  className = "",
+  trailResolution = TRAIL_TEXTURE_SIDE,
+  idleTimeout = 500,
+}) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const engineRef = useRef<HalftoneTrailEngine | null>(null);
+  const [supported, setSupported] = useState(true);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    const canvas = canvasRef.current;
+    if (!container || !canvas) return;
+
+    let engine: HalftoneTrailEngine;
+    try {
+      engine = new HalftoneTrailEngine(canvas, {
+        decay,
+        brushSize,
+        hoverBrushSize,
+        opacity,
+        hoverOpacity,
+        speedScale,
+        scale,
+        hoverSelector,
+        trailResolution,
+        idleTimeout,
+      });
+    } catch {
+      setSupported(false);
+      return;
+    }
+    engineRef.current = engine;
+
+    // Resolve color before first visible frame
+    engine.setColor(resolveColor(container, color));
+
+    const onPointerMove = (e: PointerEvent) => {
+      engine.queuePointer(
+        e.clientX,
+        e.clientY,
+        container.getBoundingClientRect(),
+      );
+    };
+    window.addEventListener("pointermove", onPointerMove, { passive: true });
+
+    // Mouse leaving the browser viewport entirely (moving up to the tab
+    // bar, off the edge of the window, etc.) — start fading immediately
+    // rather than waiting out idleTimeout.
+    const onPointerLeaveWindow = () => engine.markInactive();
+    document.addEventListener("mouseleave", onPointerLeaveWindow);
+    window.addEventListener("blur", onPointerLeaveWindow);
+
+    const ro = new ResizeObserver((entries) => {
+      const { width: w, height: h } = entries[0].contentRect;
+      if (w <= 0 || h <= 0) return;
+      const dpr = Math.min(window.devicePixelRatio, 2);
+      engine.resize(w, h, dpr);
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+    });
+    ro.observe(container);
+
+    // Pause rendering when the tab isn't visible or the element is
+    // scrolled off-screen, and hard-reset the trail so it comes back
+    // blank and fades in fresh instead of reappearing frozen mid-trail.
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        engine.hardReset();
+        engine.stop();
+      } else {
+        engine.start();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    const io = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && !document.hidden) {
+          engine.start();
+        } else {
+          engine.hardReset();
+          engine.stop();
+        }
+      },
+      { threshold: 0 },
+    );
+    io.observe(container);
+
+    return () => {
+      engine.destroy();
+      engineRef.current = null;
+      window.removeEventListener("pointermove", onPointerMove);
+      document.removeEventListener("mouseleave", onPointerLeaveWindow);
+      window.removeEventListener("blur", onPointerLeaveWindow);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      ro.disconnect();
+      io.disconnect();
+    };
+  }, [
+    scale,
+    decay,
+    brushSize,
+    hoverBrushSize,
+    opacity,
+    hoverOpacity,
+    speedScale,
+    hoverSelector,
+    trailResolution,
+    idleTimeout,
+  ]);
+
+  // Re-resolve color when prop changes or Tailwind dark-mode class toggles on <html>
+  useEffect(() => {
+    const container = containerRef.current;
+    const engine = engineRef.current;
+    if (!container || !engine) return;
+
+    const update = () => engine.setColor(resolveColor(container, color));
+    update();
+
+    const observer = new MutationObserver(update);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+    return () => observer.disconnect();
+  }, [color]);
+
+  if (!supported) return null;
+
+  return (
+    <div
+      ref={containerRef}
+      className={`absolute inset-0 pointer-events-none overflow-hidden ${className}`}
+      style={{ zIndex: 0 }}
+    >
+      <canvas
+        ref={canvasRef}
+        style={{
+          display: "block",
+          width: "100%",
+          height: "100%",
+          pointerEvents: "none",
+        }}
+      />
+    </div>
+  );
+};
+
+export default HalftoneTrail;

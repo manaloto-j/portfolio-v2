@@ -11,7 +11,9 @@ export default function NavBar() {
       className="fixed py-24 left-0 w-full px-12 flex items-center justify-between z-50"
       data-halftone-ignore
     >
-      <div className={`${navLink} leading-[80%] text-center text-[24px]`}>
+      <div
+        className={`${navLink} leading-[80%] text-center text-[24px] text-bg`}
+      >
         <p>
           <b>JOHNZELLE</b>
         </p>
@@ -20,28 +22,28 @@ export default function NavBar() {
         </p>
       </div>
 
-      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center">
+      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center text-bg">
         <Logo className="w-8 h-8 shrink-0" />
       </div>
 
       <ul className="flex gap-12 items-center">
         <li>
-          <Link className={navLink} href="/">
+          <Link className={`${navLink} text-bg`} href="/">
             Home
           </Link>
         </li>
         <li>
-          <Link className={navLink} href="/about">
+          <Link className={`${navLink} text-bg`} href="/about">
             About
           </Link>
         </li>
         <li>
-          <Link className={navLink} href="/works">
+          <Link className={`${navLink} text-bg`} href="/works">
             Works
           </Link>
         </li>
         <li>
-          <Link className={navLink} href="/contact">
+          <Link className={`${navLink} text-bg`} href="/contact">
             Contact
           </Link>
         </li>
