@@ -5,6 +5,7 @@ import profileParallax from "@/assets/images/profileImg/profile-parallax";
 import HoverParallax from "./shared/motion/HoverParallax/HoverParallax";
 import NavBar from "./shared/navigation/NavBar";
 import { useIdleAnimation } from "./shared/motion/FluidCursor/useIdleAnimation";
+import ShaderBackground from "./shared/Background";
 
 export default function Home() {
   useIdleAnimation();
@@ -22,7 +23,7 @@ export default function Home() {
           <div className="h-screen w-full">
             <ThreeDParallax
               image={profileParallax}
-              className="relative h-full w-auto mx-auto z-2"
+              className="relative h-full mt-8 w-auto mx-auto z-2"
               data-parallax-hover
               data-parallax-hover-x="-0.02"
               data-parallax-hover-y="0.03"
@@ -31,6 +32,12 @@ export default function Home() {
             />
           </div>
         </HoverParallax>
+        <ShaderBackground
+          color="#111111"
+          background="#FAFAFA"
+          density={1}
+          noiseAmount={1}
+        />
       </section>
     </div>
   );
