@@ -4,74 +4,43 @@ import React, { useRef, useEffect, useState } from "react";
  * ShaderBackground
  * ------------------------------------------------------------------
  * A dependency-free, portable animated dithered-noise background.
- * Renders full-screen using raw WebGL (no p5.js, no external libs),
- * so it can drop into any React app (CRA, Vite, Next.js, Remix, etc).
+ * Renders full-screen using raw WebGL (no p5.js, no external libs).
  *
- * Usage (full-screen, default):
- *   Drop it anywhere in your tree — no wrapper needed. It pins itself to
- *   the viewport regardless of any parent's margin/padding/max-width.
+ * NEW — hover prop:
+ *   When `hover` is true, moving the mouse over the component
+ *   dissipates (erases) the background around the cursor, revealing
+ *   whatever sits beneath the component. The effect uses the same
+ *   Bayer-dithered GLSL as the background itself, driven by a
+ *   ping-pong FBO trail with a head-and-tail shape (elongated along
+ *   the movement direction, leaving a fading wake behind it).
  *
- *     <ShaderBackground color="#111111" background="#FAFAFA" />
- *     <YourPageContent />   // renders above it automatically (zIndex: -1)
- *
- * Usage (contained inside a specific box, e.g. a hero section):
- *   Use position="absolute" and give the parent `position: relative;
- *   overflow: hidden;`. It will now fill and be clipped by that box only.
- *
- *     <div style={{ position: "relative", overflow: "hidden", height: 400 }}>
- *       <ShaderBackground position="absolute" />
- *       <div style={{ position: "relative", zIndex: 1 }}>Hero content</div>
- *     </div>
+ *   Tune the size of the dissipation area with HOVER_RADIUS below.
  *
  * Props:
- *   className              - optional class applied to the wrapping container
- *   style                  - optional extra styles merged onto the container (highest priority)
- *   scale                  - dither cell scale (bayerScale uniform), default 0.5
- *   speed                  - animation speed multiplier, default 0.5
- *   color                  - CSS color string for the "on" dither pixels, default "#ffffff"
- *                            accepts hex (with or without "#"), rgb(), hsl(), named colors, etc.
- *   background             - CSS color string for the "off" pixels, default "#000000"
- *   position               - "fixed" (default, viewport-filling) or "absolute" (fills nearest
- *                            positioned ancestor)
- *   zIndex                 - stacking order, default -1 (sits behind normal content)
- *   density                - fraction (0–1) of the canvas covered by `color` vs `background`,
- *                            default 0.5 (roughly even split). Lower = more background showing,
- *                            higher = more foreground `color` showing. If omitted AND `negative`
- *                            is on, defaults to 0.3 instead of 0.5 — see below.
- *   noiseAmount            - how much the animated noise wobbles coverage around `density`,
- *                            0–1, default 0.4. Higher = more organic/chaotic movement;
- *                            lower keeps the dot grid steady and evenly spaced while still
- *                            animating gently. 0 = a perfectly static, evenly-spaced grid.
- *   negative               - boolean prop alias for data-background-negative
- *   data-background-negative - when present (or truthy), inverts the rendered output.
- *
- * ── How "negative" works now ────────────────────────────────────────
- * Instead of pre-inverting the color/background uniforms (which relied on
- * parsing arbitrary CSS color strings through a scratch canvas, then doing
- * RGB math — fragile, and silently falls back to "not inverted" if parsing
- * ever misbehaves), the shader always renders its true colors. When
- * `negative` is set, a second, transparent layer is stacked directly on
- * top of the canvas using `backdrop-filter: invert(1)`. That layer inverts
- * whatever pixels are rendered beneath it, the same way a CSS
- * `filter: invert(1)` would, but scoped only to this component instead of
- * the whole page. This is simpler, can't drift out of sync with the
- * shader's actual colors, and has no failure mode that quietly no-ops.
- *
- * Note on density: with a ~50/50 color/background split, inverting the
- * colors alone can look deceptively similar to the non-inverted version —
- * two roughly-balanced colors swapped still read as "roughly balanced."
- * To make the effect actually read as different, `negative` also shifts
- * the default `density` down to 0.3, so background visibly dominates the
- * canvas instead of just trading places with the foreground color. Pass
- * an explicit `density` prop to override this in either mode.
- *
- * Negative color examples (visually, after the invert layer):
- *   #111111 → looks like #EEEEEE   (near-black becomes near-white)
- *   #FAFAFA → looks like #050505   (near-white becomes near-black)
- *   #FF0000 → looks like #00FFFF   (red becomes cyan)
+ *   hover        - boolean, default false. Enables mouse dissipation.
+ *   className, style, scale, speed, color, background, position,
+ *   zIndex, density, noiseAmount, negative / data-background-negative
+ *   — all unchanged from the original.
  * ------------------------------------------------------------------
  */
 
+// ── Hover dissipation tuning ─────────────────────────────────────
+// Radius of the dissipation brush in UV-space (0–1).
+// Larger = bigger clear area around the cursor.
+const HOVER_RADIUS = 0.05;
+
+// How much the trail elongates along the movement direction.
+// 1 = round blob; higher = more stretched teardrop / comet tail.
+const HOVER_ELONGATION_SCALE = 2.5;
+
+// Per-frame decay of the trail texture (0–1).
+// Values closer to 1 keep the tail visible longer.
+const HOVER_DECAY = 0.96;
+
+// Side length (in texels) of the ping-pong trail texture.
+const HOVER_TRAIL_SIDE = 512;
+
+// ── Vertex shader (shared) ───────────────────────────────────────
 const VERT_SRC = `
 attribute vec2 aPosition;
 varying vec2 vUv;
@@ -82,6 +51,9 @@ void main() {
 }
 `;
 
+// ── Main background fragment shader ──────────────────────────────
+// When u_useTrail is 1, samples the trail texture and drives alpha to
+// 0 where the trail is hot (dissipation / reveal-through effect).
 const FRAG_SRC = `
 #ifdef GL_ES
 precision highp float;
@@ -95,6 +67,8 @@ uniform float u_density;
 uniform float u_noiseAmount;
 uniform vec3 u_color;
 uniform vec3 u_background;
+uniform sampler2D u_trail;
+uniform int u_useTrail;
 
 // Simplex noise (Ashima Arts)
 vec4 permute(vec4 x){return mod(((x*34.0)+1.0)*x,289.0);}
@@ -163,20 +137,63 @@ void main() {
   float n2 = snoise(vec3(uv + 5.0, t * 1.2));
   float gray = mix(n1, n2, 0.5) * 0.5 + 0.5;
 
-  // Anchor coverage at u_density (this is what keeps the dot grid evenly
-  // spaced and stable) and let the noise field only nudge it up/down by a
-  // small, controlled amount — enough to animate/twinkle, not enough to
-  // swing whole spatially-correlated patches of the noise above or below
-  // threshold together (that swinging is what read as "random dots"
-  // clustering unevenly instead of a steady, evenly-spaced sparkle).
   float wobble = (gray - 0.5) * u_noiseAmount;
   float grayAdjusted = clamp(u_density + wobble, 0.0, 1.0);
 
   float d = step(Bayer32(gl_FragCoord.xy * u_scale), grayAdjusted);
-  gl_FragColor = vec4(mix(u_background, u_color, d), 1.0);
+  vec3 col = mix(u_background, u_color, d);
+
+  // Hover dissipation: use the trail value to cut alpha, punching a
+  // dithered hole through the background where the cursor has been.
+  float alpha = 1.0;
+  if (u_useTrail == 1) {
+    float trail = texture2D(u_trail, vUv).r;
+    // Dither the edge of the dissipation so it matches the background grain.
+    float ditheredTrail = step(Bayer32(gl_FragCoord.xy * u_scale), 1.0 - trail);
+    alpha = ditheredTrail;
+  }
+
+  gl_FragColor = vec4(col, alpha);
 }
 `;
 
+// ── Trail update fragment shader ─────────────────────────────────
+// Paints a velocity-elongated Gaussian blob at the cursor position
+// each frame, then decays the whole buffer toward 0.
+const TRAIL_FRAG_SRC = `
+#ifdef GL_ES
+precision mediump float;
+#endif
+
+varying vec2 vUv;
+uniform sampler2D u_prevTrail;
+uniform vec2 u_mouse;
+uniform vec2 u_mouseDir;
+uniform float u_velocity;
+uniform float u_decay;
+uniform float u_brushSize;
+uniform float u_aspect;
+uniform float u_reveal;
+
+void main() {
+  float prev = texture2D(u_prevTrail, vUv).r * u_decay;
+
+  vec2 delta = vUv - u_mouse;
+  delta.x *= u_aspect;
+
+  // Elongate the blob along the movement direction (head shape).
+  vec2 dir = length(u_mouseDir) > 0.001 ? u_mouseDir : vec2(0.0, 1.0);
+  float along = dot(delta, dir);
+  float perp = length(delta - along * dir);
+  float elongation = 1.0 + u_velocity * ${HOVER_ELONGATION_SCALE.toFixed(1)};
+  float blobDist = sqrt(along * along / elongation + perp * perp);
+  float blob = exp(-blobDist * blobDist / (u_brushSize * u_brushSize)) * u_reveal;
+
+  gl_FragColor = vec4(min(prev + blob, 1.0), 0.0, 0.0, 1.0);
+}
+`;
+
+// ── Colour parsing ───────────────────────────────────────────────
 let _colorCanvas = null;
 let _colorCtx = null;
 
@@ -218,6 +235,7 @@ function cssColorToRgb01(input, fallback = [1, 1, 1]) {
   }
 }
 
+// ── WebGL helpers ────────────────────────────────────────────────
 function compileShader(gl, type, source) {
   const shader = gl.createShader(type);
   gl.shaderSource(shader, source);
@@ -247,6 +265,38 @@ function createProgram(gl, vertSrc, fragSrc) {
   return program;
 }
 
+function createFBO(gl, w, h) {
+  const texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texImage2D(
+    gl.TEXTURE_2D,
+    0,
+    gl.RGBA,
+    w,
+    h,
+    0,
+    gl.RGBA,
+    gl.UNSIGNED_BYTE,
+    null,
+  );
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  const fb = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.framebufferTexture2D(
+    gl.FRAMEBUFFER,
+    gl.COLOR_ATTACHMENT0,
+    gl.TEXTURE_2D,
+    texture,
+    0,
+  );
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  return { fb, texture };
+}
+
+// ── Component ────────────────────────────────────────────────────
 export default function ShaderBackground({
   className = "",
   style = {},
@@ -256,33 +306,20 @@ export default function ShaderBackground({
   background = "#000000",
   position = "fixed",
   zIndex = -1,
-  // fraction of canvas covered by `color` vs `background`. Left undefined
-  // by default so we can tell "user didn't set it" apart from "user set
-  // it to 0.5" — see effectiveDensity below.
   density,
-  // how much the animated noise wobbles coverage around `density`
-  // (0 = perfectly static grid, 1 = old fully noise-driven behavior).
-  // Lower values keep the dot grid evenly spaced while still animating.
   noiseAmount = 0.4,
-  // ── negative mode ─────────────────────────────────────────────────
-  // Accept both the data-attribute form and a plain boolean prop.
-  // Either one being truthy activates inversion.
-  //   <ShaderBackground data-background-negative />
-  //   <ShaderBackground negative />
-  //   <ShaderBackground negative={true} />
   "data-background-negative": dataNegative = false,
   negative = false,
+  // ── New prop ─────────────────────────────────────────────────
+  // When true, the background dissipates around the mouse cursor,
+  // revealing whatever is stacked beneath this component.
+  hover = false,
 }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const [error, setError] = useState(null);
 
-  // Resolve once — both spellings mean the same thing.
   const isNegative = Boolean(negative || dataNegative);
-
-  // If the caller didn't pass an explicit density, default to 0.3 when
-  // negative mode is on (so background visibly dominates) and 0.5
-  // otherwise (roughly even split). Explicit `density` always wins.
   const effectiveDensity = Math.min(
     1,
     Math.max(0, density !== undefined ? density : isNegative ? 0.3 : 0.5),
@@ -301,26 +338,78 @@ export default function ShaderBackground({
     const container = containerRef.current;
     if (!canvas || !container) return;
 
+    // Request alpha so the canvas can be transparent where dissipated.
     const gl =
-      canvas.getContext("webgl", { antialias: false }) ||
-      canvas.getContext("experimental-webgl", { antialias: false });
+      canvas.getContext("webgl", {
+        antialias: false,
+        alpha: true,
+        premultipliedAlpha: false,
+      }) ||
+      canvas.getContext("experimental-webgl", {
+        antialias: false,
+        alpha: true,
+        premultipliedAlpha: false,
+      });
 
     if (!gl) {
       setError("WebGL is not supported in this browser");
       return;
     }
 
-    let program, positionBuffer, positionLoc;
-    let uResolution, uTime, uScale, uDensity, uNoiseAmount, uColor, uBackground;
+    let bgProgram, trailProgram;
+    let positionBuffer;
     let rafId;
     let startTime = performance.now();
     let destroyed = false;
 
-    // The shader always renders its TRUE colors. Inversion (if requested)
-    // is handled entirely by the backdrop-filter overlay layer below, not
-    // here — so this parsing can never silently break "negative" mode.
+    // ── Background program uniforms
+    let uResolution,
+      uTime,
+      uScale,
+      uDensity,
+      uNoiseAmount,
+      uColor,
+      uBackground,
+      uTrail,
+      uUseTrail;
+
+    // ── Trail program uniforms
+    let tPrevTrail,
+      tMouse,
+      tMouseDir,
+      tVelocity,
+      tDecay,
+      tBrushSize,
+      tAspect,
+      tReveal;
+
+    // ── Ping-pong FBOs (only allocated when hover = true)
+    let fboA = null;
+    let fboB = null;
+
+    // ── Mouse tracking state
+    let mouseX = 0.5;
+    let mouseY = 0.5;
+    let prevMouseX = 0.5;
+    let prevMouseY = 0.5;
+    let dirX = 0.0;
+    let dirY = 1.0;
+    let velocity = 0.0;
+    let reveal = 0.0;
+    let lastActivity = -Infinity;
+    let pendingPointer = null;
+
     const colorRgb = cssColorToRgb01(color, [1, 1, 1]);
     const backgroundRgb = cssColorToRgb01(background, [0, 0, 0]);
+
+    // ── Pointer handler (queues, applied once per frame)
+    const onPointerMove = (e) => {
+      pendingPointer = { clientX: e.clientX, clientY: e.clientY };
+      lastActivity = performance.now();
+    };
+    const onPointerLeave = () => {
+      lastActivity = -Infinity;
+    };
 
     const handleContextLost = (e) => {
       e.preventDefault();
@@ -340,26 +429,75 @@ export default function ShaderBackground({
       false,
     );
 
-    function init() {
-      program = createProgram(gl, VERT_SRC, FRAG_SRC);
-      gl.useProgram(program);
+    function applyPointer(clientX, clientY) {
+      const rect = container.getBoundingClientRect();
+      const w = canvas.clientWidth;
+      const h = canvas.clientHeight;
 
+      prevMouseX = mouseX;
+      prevMouseY = mouseY;
+      mouseX = (clientX - rect.left) / w;
+      mouseY = 1.0 - (clientY - rect.top) / h;
+
+      const aspect = w / (h || 1);
+      const dx = (mouseX - prevMouseX) * aspect;
+      const dy = mouseY - prevMouseY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      velocity = Math.min(35.0 * dist, 1.0);
+      if (dist > 1e-4) {
+        dirX = dx / dist;
+        dirY = dy / dist;
+      }
+    }
+
+    function init() {
+      // Compile programs
+      bgProgram = createProgram(gl, VERT_SRC, FRAG_SRC);
+      if (hover) {
+        trailProgram = createProgram(gl, VERT_SRC, TRAIL_FRAG_SRC);
+      }
+
+      // Shared full-screen quad
       const quad = new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]);
       positionBuffer = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
       gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
 
-      positionLoc = gl.getAttribLocation(program, "aPosition");
-      gl.enableVertexAttribArray(positionLoc);
-      gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
+      // Background program — cache uniform locations
+      uResolution = gl.getUniformLocation(bgProgram, "u_resolution");
+      uTime = gl.getUniformLocation(bgProgram, "u_time");
+      uScale = gl.getUniformLocation(bgProgram, "u_scale");
+      uDensity = gl.getUniformLocation(bgProgram, "u_density");
+      uNoiseAmount = gl.getUniformLocation(bgProgram, "u_noiseAmount");
+      uColor = gl.getUniformLocation(bgProgram, "u_color");
+      uBackground = gl.getUniformLocation(bgProgram, "u_background");
+      uTrail = gl.getUniformLocation(bgProgram, "u_trail");
+      uUseTrail = gl.getUniformLocation(bgProgram, "u_useTrail");
 
-      uResolution = gl.getUniformLocation(program, "u_resolution");
-      uTime = gl.getUniformLocation(program, "u_time");
-      uScale = gl.getUniformLocation(program, "u_scale");
-      uDensity = gl.getUniformLocation(program, "u_density");
-      uNoiseAmount = gl.getUniformLocation(program, "u_noiseAmount");
-      uColor = gl.getUniformLocation(program, "u_color");
-      uBackground = gl.getUniformLocation(program, "u_background");
+      // Trail program — cache uniform locations
+      if (hover && trailProgram) {
+        tPrevTrail = gl.getUniformLocation(trailProgram, "u_prevTrail");
+        tMouse = gl.getUniformLocation(trailProgram, "u_mouse");
+        tMouseDir = gl.getUniformLocation(trailProgram, "u_mouseDir");
+        tVelocity = gl.getUniformLocation(trailProgram, "u_velocity");
+        tDecay = gl.getUniformLocation(trailProgram, "u_decay");
+        tBrushSize = gl.getUniformLocation(trailProgram, "u_brushSize");
+        tAspect = gl.getUniformLocation(trailProgram, "u_aspect");
+        tReveal = gl.getUniformLocation(trailProgram, "u_reveal");
+
+        // Allocate ping-pong FBOs and clear them
+        fboA = createFBO(gl, HOVER_TRAIL_SIDE, HOVER_TRAIL_SIDE);
+        fboB = createFBO(gl, HOVER_TRAIL_SIDE, HOVER_TRAIL_SIDE);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fboA.fb);
+        gl.clearColor(0, 0, 0, 0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fboB.fb);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      }
+
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
       resize();
       startTime = performance.now();
@@ -383,9 +521,63 @@ export default function ShaderBackground({
       resize();
 
       const t = ((now - startTime) / 1000) * speed;
+      const w = canvas.width;
+      const h = canvas.height;
+      const aspect = w / (h || 1);
 
-      gl.useProgram(program);
-      gl.uniform2f(uResolution, canvas.width, canvas.height);
+      // ── Apply queued pointer ─────────────────────────────────
+      if (pendingPointer) {
+        applyPointer(pendingPointer.clientX, pendingPointer.clientY);
+        pendingPointer = null;
+      }
+
+      // ── Pass 1: update trail FBO (only when hover enabled) ───
+      if (hover && trailProgram && fboA && fboB) {
+        const idle = performance.now() - lastActivity > 500;
+        reveal = reveal + (idle ? -0.05 : 0.1) * (idle ? reveal : 1.0 - reveal);
+        reveal = Math.max(0, Math.min(1, reveal));
+        velocity *= 0.9;
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fboB.fb);
+        gl.viewport(0, 0, HOVER_TRAIL_SIDE, HOVER_TRAIL_SIDE);
+
+        gl.useProgram(trailProgram);
+        const tPosLoc = gl.getAttribLocation(trailProgram, "aPosition");
+        gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+        gl.enableVertexAttribArray(tPosLoc);
+        gl.vertexAttribPointer(tPosLoc, 2, gl.FLOAT, false, 0, 0);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, fboA.texture);
+        gl.uniform1i(tPrevTrail, 0);
+        gl.uniform2f(tMouse, mouseX, mouseY);
+        gl.uniform2f(tMouseDir, dirX, dirY);
+        gl.uniform1f(tVelocity, velocity);
+        gl.uniform1f(tDecay, HOVER_DECAY);
+        gl.uniform1f(tBrushSize, HOVER_RADIUS);
+        gl.uniform1f(tAspect, aspect);
+        gl.uniform1f(tReveal, reveal);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+        // Swap ping-pong buffers
+        const tmp = fboA;
+        fboA = fboB;
+        fboB = tmp;
+      }
+
+      // ── Pass 2: render background to screen ──────────────────
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, w, h);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+
+      gl.useProgram(bgProgram);
+      const bPosLoc = gl.getAttribLocation(bgProgram, "aPosition");
+      gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+      gl.enableVertexAttribArray(bPosLoc);
+      gl.vertexAttribPointer(bPosLoc, 2, gl.FLOAT, false, 0, 0);
+
+      gl.uniform2f(uResolution, w, h);
       gl.uniform1f(uTime, t);
       gl.uniform1f(uScale, scale);
       gl.uniform1f(uDensity, effectiveDensity);
@@ -398,12 +590,28 @@ export default function ShaderBackground({
         backgroundRgb[2],
       );
 
+      if (hover && fboA) {
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, fboA.texture);
+        gl.uniform1i(uTrail, 0);
+        gl.uniform1i(uUseTrail, 1);
+      } else {
+        gl.uniform1i(uUseTrail, 0);
+      }
+
       gl.drawArrays(gl.TRIANGLES, 0, 6);
+
       rafId = requestAnimationFrame(render);
     }
 
     const resizeObserver = new ResizeObserver(() => resize());
     resizeObserver.observe(container);
+
+    if (hover) {
+      window.addEventListener("pointermove", onPointerMove, { passive: true });
+      document.addEventListener("mouseleave", onPointerLeave);
+      window.addEventListener("blur", onPointerLeave);
+    }
 
     try {
       init();
@@ -418,10 +626,26 @@ export default function ShaderBackground({
       resizeObserver.disconnect();
       canvas.removeEventListener("webglcontextlost", handleContextLost);
       canvas.removeEventListener("webglcontextrestored", handleContextRestored);
-      if (gl && positionBuffer) gl.deleteBuffer(positionBuffer);
-      if (gl && program) gl.deleteProgram(program);
+      if (hover) {
+        window.removeEventListener("pointermove", onPointerMove);
+        document.removeEventListener("mouseleave", onPointerLeave);
+        window.removeEventListener("blur", onPointerLeave);
+      }
+      if (gl) {
+        if (positionBuffer) gl.deleteBuffer(positionBuffer);
+        if (bgProgram) gl.deleteProgram(bgProgram);
+        if (trailProgram) gl.deleteProgram(trailProgram);
+        if (fboA) {
+          gl.deleteFramebuffer(fboA.fb);
+          gl.deleteTexture(fboA.texture);
+        }
+        if (fboB) {
+          gl.deleteFramebuffer(fboB.fb);
+          gl.deleteTexture(fboB.texture);
+        }
+      }
     };
-  }, [scale, speed, color, background, effectiveDensity, noiseAmount]);
+  }, [scale, speed, color, background, effectiveDensity, noiseAmount, hover]);
 
   const isFixed = position === "fixed";
 
@@ -453,10 +677,7 @@ export default function ShaderBackground({
         style={{ display: "block", width: "100%", height: "100%" }}
       />
 
-      {/* Inversion overlay — a transparent layer stacked on top of the
-          canvas whose only job is to invert whatever is rendered beneath
-          it via backdrop-filter. Only mounted when `negative` is set, so
-          there's zero cost (no extra compositing layer) in the default case. */}
+      {/* Inversion overlay — only mounted when `negative` is set */}
       {isNegative && (
         <div
           aria-hidden="true"
