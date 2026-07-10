@@ -6,6 +6,7 @@ import HoverParallax from "./shared/motion/HoverParallax/HoverParallax";
 import NavBar from "./shared/navigation/NavBar";
 import { useIdleAnimation } from "./shared/motion/FluidCursor/useIdleAnimation";
 import ShaderBackground from "./shared/Background";
+import FluidCursor from "./shared/motion/FluidCursor/FluidCursor";
 
 export default function Home() {
   useIdleAnimation();
@@ -32,12 +33,15 @@ export default function Home() {
             />
           </div>
         </HoverParallax>
-        <ShaderBackground
+        {/* <ShaderBackground
           color="#111111"
           background="#FAFAFA"
-          density={1}
+          density={0.8}
           noiseAmount={1}
-        />
+          hover={true}
+        /> */}
+
+        <FluidCursor />
       </section>
     </div>
   );

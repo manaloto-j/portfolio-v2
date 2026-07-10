@@ -129,8 +129,7 @@ export function useInputHandlers({
         targetMouse.current.y = 0;
         wakeRender();
         scheduleIdle();
-      }
-      else updateTargetFromKeys();
+      } else updateTargetFromKeys();
     };
 
     scheduleIdle();
